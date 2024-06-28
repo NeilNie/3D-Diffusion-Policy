@@ -250,18 +250,17 @@ class TrainDP3Workspace:
                 policy = self.ema_model
             policy.eval()
 
-            # run rollout
-            if (self.epoch % cfg.training.rollout_every) == 0 and RUN_ROLLOUT and env_runner is not None:
-                t3 = time.time()
-                # runner_log = env_runner.run(policy, dataset=dataset)
-                runner_log = env_runner.run(policy)
-                t4 = time.time()
-                # print(f"rollout time: {t4-t3:.3f}")
-                # log all
-                step_log.update(runner_log)
+            # # run rollout
+            # if (self.epoch % cfg.training.rollout_every) == 0 and RUN_ROLLOUT and env_runner is not None:
+            #     t3 = time.time()
+            #     # runner_log = env_runner.run(policy, dataset=dataset)
+            #     runner_log = env_runner.run(policy)
+            #     t4 = time.time()
+            #     # print(f"rollout time: {t4-t3:.3f}")
+            #     # log all
+            #     step_log.update(runner_log)
 
-            
-                
+
             # run validation
             if (self.epoch % cfg.training.val_every) == 0 and RUN_VALIDATION:
                 with torch.no_grad():
@@ -279,6 +278,7 @@ class TrainDP3Workspace:
                         val_loss = torch.mean(torch.tensor(val_losses)).item()
                         # log epoch average validation loss
                         step_log['val_loss'] = val_loss
+                        wandb_run.log(step_log, step=self.global_step)
 
             # run diffusion sampling on a training batch
             if (self.epoch % cfg.training.sample_every) == 0:
@@ -292,6 +292,7 @@ class TrainDP3Workspace:
                     pred_action = result['action_pred']
                     mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                     step_log['train_action_mse_error'] = mse.item()
+                    print(f"train_action_mse_error: {mse.item()}")
                     del batch
                     del obs_dict
                     del gt_action
@@ -301,8 +302,11 @@ class TrainDP3Workspace:
 
             if env_runner is None:
                 step_log['test_mean_score'] = - train_loss
-                
+
             # checkpoint
+
+            print("saving checkpoint...")
+            
             if (self.epoch % cfg.training.checkpoint_every) == 0 and cfg.checkpoint.save_ckpt:
                 # checkpointing
                 if cfg.checkpoint.save_last_ckpt:
@@ -395,19 +399,11 @@ class TrainDP3Workspace:
             if hasattr(value, 'state_dict') and hasattr(value, 'load_state_dict'):
                 # modules, optimizers and samplers etc
                 if key not in exclude_keys:
-                    if use_thread:
-                        payload['state_dicts'][key] = _copy_to_cpu(value.state_dict())
-                    else:
-                        payload['state_dicts'][key] = value.state_dict()
+                    payload['state_dicts'][key] = value.state_dict()
             elif key in include_keys:
                 payload['pickles'][key] = dill.dumps(value)
-        if use_thread:
-            self._saving_thread = threading.Thread(
-                target=lambda : torch.save(payload, path.open('wb'), pickle_module=dill))
-            self._saving_thread.start()
-        else:
-            torch.save(payload, path.open('wb'), pickle_module=dill)
-        
+        torch.save(payload, path.open('wb'), pickle_module=dill)
+
         del payload
         torch.cuda.empty_cache()
         return str(path.absolute())

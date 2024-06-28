@@ -1,5 +1,5 @@
 defaults:
-  - task: adroit_hammer
+  - task: blade_open_left_door
 
 name: train_dp3
 

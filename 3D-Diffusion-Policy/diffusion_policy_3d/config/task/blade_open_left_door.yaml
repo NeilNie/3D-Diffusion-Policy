@@ -9,10 +9,10 @@ shape_meta: &shape_meta
       shape: [1024, 3]
       type: point_cloud
     agent_pos:
-      shape: [14]
+      shape: [13]
       type: low_dimx
   action:
-    shape: [14]
+    shape: [13]
 
 env_runner: null
 
