@@ -20,10 +20,10 @@ import wandb
 import tqdm
 import numpy as np
 from termcolor import cprint
-import shutil
 import time
-import threading
+import trimesh
 from hydra.core.hydra_config import HydraConfig
+
 from diffusion_policy_3d.policy.dp3 import DP3
 from diffusion_policy_3d.dataset.base_dataset import BaseDataset
 from diffusion_policy_3d.env_runner.base_runner import BaseRunner
@@ -31,6 +31,9 @@ from diffusion_policy_3d.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy_3d.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy_3d.model.diffusion.ema_model import EMAModel
 from diffusion_policy_3d.model.common.lr_scheduler import get_scheduler
+from diffusion_policy_3d.utils.visualization import change_textured_mesh_color, assign_colors
+from diffusion_policy_3d.utils.transformations import euler_matrix
+
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -174,7 +177,6 @@ class TrainDP3Workspace:
         # save batch for sampling
         train_sampling_batch = None
 
-
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         for local_epoch_idx in range(cfg.training.num_epochs):
@@ -250,17 +252,6 @@ class TrainDP3Workspace:
                 policy = self.ema_model
             policy.eval()
 
-            # # run rollout
-            # if (self.epoch % cfg.training.rollout_every) == 0 and RUN_ROLLOUT and env_runner is not None:
-            #     t3 = time.time()
-            #     # runner_log = env_runner.run(policy, dataset=dataset)
-            #     runner_log = env_runner.run(policy)
-            #     t4 = time.time()
-            #     # print(f"rollout time: {t4-t3:.3f}")
-            #     # log all
-            #     step_log.update(runner_log)
-
-
             # run validation
             if (self.epoch % cfg.training.val_every) == 0 and RUN_VALIDATION:
                 with torch.no_grad():
@@ -278,7 +269,6 @@ class TrainDP3Workspace:
                         val_loss = torch.mean(torch.tensor(val_losses)).item()
                         # log epoch average validation loss
                         step_log['val_loss'] = val_loss
-                        wandb_run.log(step_log, step=self.global_step)
 
             # run diffusion sampling on a training batch
             if (self.epoch % cfg.training.sample_every) == 0:
@@ -327,6 +317,8 @@ class TrainDP3Workspace:
 
                 if topk_ckpt_path is not None:
                     self.save_checkpoint(path=topk_ckpt_path)
+
+            print("done saving checkpoints")
             # ========= eval end for this epoch ==========
             policy.train()
 
@@ -346,32 +338,149 @@ class TrainDP3Workspace:
         if lastest_ckpt_path.is_file():
             cprint(f"Resuming from checkpoint {lastest_ckpt_path}", 'magenta')
             self.load_checkpoint(path=lastest_ckpt_path)
-        
-        # configure env
-        env_runner: BaseRunner
-        env_runner = hydra.utils.instantiate(
-            cfg.task.env_runner,
-            output_dir=self.output_dir)
-        assert isinstance(env_runner, BaseRunner)
+
+
+        # configure dataset
+        dataset: BaseDataset
+        dataset = hydra.utils.instantiate(cfg.task.dataset)
+
+        assert isinstance(dataset, BaseDataset), print(f"dataset must be BaseDataset, got {type(dataset)}")
+        normalizer = dataset.get_normalizer()
+
+        # configure validation dataset
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+
+        # set normalizers
+        self.model.set_normalizer(normalizer)
+        if cfg.training.use_ema:
+            self.ema_model.set_normalizer(normalizer)
+
+        # get the policy
         policy = self.model
         if cfg.training.use_ema:
             policy = self.ema_model
         policy.eval()
         policy.cuda()
 
-        runner_log = env_runner.run(policy)
+        device = torch.device(cfg.training.device)
         
-      
-        cprint(f"---------------- Eval Results --------------", 'magenta')
-        for key, value in runner_log.items():
-            if isinstance(value, float):
-                cprint(f"{key}: {value:.4f}", 'magenta')
+        calvin_root = "/viscam/u/neilnie/workspace/calvin_env"
+        gripper_mesh = trimesh.load(
+            os.path.join(calvin_root, "data/franka_panda_soft/gripper_open/model.obj"),
+            force="mesh",
+        )
+
+        import pyvirtualdisplay
+        pyvirtualdisplay.Display(visible=0, size=(1920, 1080)).start()
+
+        def get_cam_pose_from_look_at(at, eye, up=(0,0,1)):
+            # https://stackoverflow.com/questions/349050/calculating-a-lookat-matrix
+
+            at = np.array(at)
+            eye = np.array(eye)
+            up = np.array(up)
+
+            # Compute rotation matrix
+            zaxis = (at - eye) / np.linalg.norm(at - eye)
+            xaxis = np.cross(zaxis, up) / np.linalg.norm(np.cross(zaxis, up))
+            yaxis = np.cross(zaxis, xaxis)
+            cam_pose = np.eye(4)
+            cam_pose[:3, 0] = xaxis
+            cam_pose[:3, 1] = yaxis
+            cam_pose[:3, 2] = zaxis
+
+            cam_pose[:3, 3] = eye
+            return cam_pose
+
+        tf_base_ee = np.array(
+            [
+                [0.9998, 0.0131, 0.0156, 0.5349],
+                [0.0132, -0.9999, -0.0057, -0.0175],
+                [0.0156, 0.0059, -0.9999, -0.1028],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        )
+        tf_ee_link = np.eye(4)
+        tf_ee_link[:3, 3] = [0, 0, -0.10472659 - 0.02]
+        tf_base_link = tf_base_ee @ tf_ee_link
+        tf_link_cam = euler_matrix(np.pi, 0, -np.pi / 2)
+        tf_base_cam = tf_base_link @ tf_link_cam
+        tf_base_world = tf_base_cam
+        tf_world_base = np.linalg.inv(tf_base_world)
+
+        with tqdm.tqdm(val_dataloader, desc=f"Evaluating...", 
+                            leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+            for index, batch in enumerate(tepoch):
+
+                batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                obs_dict = batch['obs']
+                gt_action = batch['action']
+
+                result = policy.predict_action(obs_dict)
+                pred_action = result['action_pred'][0].detach().cpu().numpy()
+                pred_T = pred_action[:, :3]
+                pred_R = pred_action[:, 3:3+9]
+
+                transforms = []
+                for T, R in zip(pred_T, pred_R):
+                    transform = np.eye(4)
+                    transform[:3, :3] = R.reshape(3, 3)
+                    transform[:3, -1] = T
+                    transforms.append(transform)
+                transforms = np.array(transforms)
+
+                point_cloud = batch["obs"]["point_cloud"][0][-1].detach().cpu().numpy()
+                point_cloud[:, :3] /= 0.0002500000118743628
+
+                # visualize gt
+                # this_gt_actions = gt_actions[0]
+                # vis_scene = trimesh.Scene([trimesh.PointCloud(xyzrgb[:, :3], colors=xyzrgb[:, 3:])])
+                # colors = assign_colors(0, len(this_gt_actions))
+                # for action, color in zip(this_gt_actions, colors):
+                #     gripper_vis = dataset.gripper_mesh.copy()
+                #     gripper_vis.apply_transform(action_vector_to_gripper_pose_new(action, dataset.rot_euler_to_6d)[0])
+                #     color[3] = 120
+                #     change_textured_mesh_color(gripper_vis, color)  # purple
+                #     vis_scene.add_geometry(gripper_vis)
+                # vis_scene.show()
+                
+                # visualize pred
+                # for actions in batch_actions:
+                vis_scene = trimesh.Scene([trimesh.PointCloud(point_cloud[:, :3], colors=point_cloud[:, 3:])])
+                colors = assign_colors(0, len(transforms))
+                for action, color in zip(transforms, colors):
+                    gripper_vis = gripper_mesh.copy()
+                    gripper_vis.apply_transform(tf_world_base @ action)
+                    color[3] = 120
+                    change_textured_mesh_color(gripper_vis, color)  # purple
+                    vis_scene.add_geometry(gripper_vis)
+
+                directory = "rollout"
+                filename = f"visualization_{index}.png"
+                filename = os.path.join(directory, filename)
+
+                camera_position = [2, 2, 1]
+                look_at = [0, 0, 0]
+
+                camera_pose = get_cam_pose_from_look_at(look_at, camera_position)
+                camera_transform = camera_pose @ np.diag([1, -1, -1, 1])
+                vis_scene.camera_transform = camera_transform
+    
+                png = vis_scene.save_image([1000, 1000], visible=True, line_settings= {'point_size': 4})
+                with open(filename, 'wb') as f:
+                    f.write(png)
+                    f.close()
+                # import pdb; pdb.set_trace()
+
+        cprint(f"---------------- Done! --------------", 'magenta')
         
     @property
     def output_dir(self):
         output_dir = self._output_dir
         if output_dir is None:
             output_dir = HydraConfig.get().runtime.output_dir
+        return "/viscam/projects/kdm/checkpoints"
         return output_dir
     
 
@@ -428,8 +537,6 @@ class TrainDP3Workspace:
             return pathlib.Path(self.output_dir).joinpath('checkpoints', best_ckpt)
         else:
             raise NotImplementedError(f"tag {tag} not implemented")
-            
-            
 
     def load_payload(self, payload, exclude_keys=None, include_keys=None, **kwargs):
         if exclude_keys is None:
@@ -443,7 +550,7 @@ class TrainDP3Workspace:
         for key in include_keys:
             if key in payload['pickles']:
                 self.__dict__[key] = dill.loads(payload['pickles'][key])
-    
+
     def load_checkpoint(self, path=None, tag='latest',
             exclude_keys=None, 
             include_keys=None, 
