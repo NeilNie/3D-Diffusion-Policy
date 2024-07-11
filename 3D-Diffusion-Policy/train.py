@@ -460,14 +460,23 @@ class TrainDP3Workspace:
                 filename = f"visualization_{index}.png"
                 filename = os.path.join(directory, filename)
 
-                camera_position = [2, 2, 1]
                 look_at = [0, 0, 0]
 
+                camera_position = [1.8, 1.8, 1.2]
                 camera_pose = get_cam_pose_from_look_at(look_at, camera_position)
                 camera_transform = camera_pose @ np.diag([1, -1, -1, 1])
                 vis_scene.camera_transform = camera_transform
-    
-                png = vis_scene.save_image([1000, 1000], visible=True, line_settings= {'point_size': 4})
+                png_1 = vis_scene.save_image([1000, 1000], visible=True, line_settings= {'point_size': 4})
+
+                camera_position = [0.2, 0.2, 2.2]
+                camera_pose = get_cam_pose_from_look_at(look_at, camera_position)
+                camera_transform = camera_pose @ np.diag([1, -1, -1, 1])
+                vis_scene.camera_transform = camera_transform
+                png_2 = vis_scene.save_image([1000, 1000], visible=True, line_settings= {'point_size': 4})
+
+                # horizontal concat these images
+                png = np.concatenate([png_1, png_2], axis=1)
+
                 with open(filename, 'wb') as f:
                     f.write(png)
                     f.close()
@@ -481,7 +490,7 @@ class TrainDP3Workspace:
         if output_dir is None:
             output_dir = HydraConfig.get().runtime.output_dir
         return "/viscam/projects/kdm/checkpoints"
-        return output_dir
+        # return output_dir
     
 
     def save_checkpoint(self, path=None, tag='latest', 
