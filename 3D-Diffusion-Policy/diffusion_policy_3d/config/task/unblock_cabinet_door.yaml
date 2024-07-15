@@ -1,12 +1,12 @@
-name: blade_open_left_door
+name: unblock_cabinet_door
 
-task_name: blade_open_left_door
+task_name: unblock_cabinet_door
 
 shape_meta: &shape_meta
   # acceptable types: rgb, low_dim
   obs:
     point_cloud:
-      shape: [2048, 6]
+      shape: [4096, 6]
       type: point_cloud
     agent_pos:
       shape: [13]
@@ -18,7 +18,7 @@ env_runner: null
 
 dataset:
   _target_: diffusion_policy_3d.dataset.blade_dataset.BLADEDataset
-  zarr_path: /viscam/projects/kdm/open_cabinet_door_left-zero_action_real_img_null_action_obs_horizon_2.zarr
+  zarr_path: /viscam/projects/kdm/unblock_cabinet_doors-dp3_point_cloud.zarr
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1'}
   pad_after: ${eval:'${n_action_steps}-1'}
