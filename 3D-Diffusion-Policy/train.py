@@ -103,6 +103,16 @@ class TrainDP3Workspace:
         dataset: BaseDataset
         dataset = hydra.utils.instantiate(cfg.task.dataset)
 
+        # import open3d as o3d
+        # pcd = dataset[0]["obs"]["point_cloud"][0]
+        # pcd[:, :3] /= 0.0002500000118743628
+        
+        # point_cloud = o3d.geometry.PointCloud()
+        # point_cloud.points = o3d.utility.Vector3dVector(pcd[:, :3])
+        # point_cloud.colors = o3d.utility.Vector3dVector(pcd[:, 3:6])
+        # o3d.io.write_point_cloud("point_cloud.ply", point_cloud)
+        # import pdb; pdb.set_trace()
+
         assert isinstance(dataset, BaseDataset), print(f"dataset must be BaseDataset, got {type(dataset)}")
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
         normalizer = dataset.get_normalizer()
@@ -451,7 +461,7 @@ class TrainDP3Workspace:
                 colors = assign_colors(0, len(transforms))
                 for action, color in zip(transforms, colors):
                     gripper_vis = gripper_mesh.copy()
-                    gripper_vis.apply_transform(tf_world_base @ action)
+                    gripper_vis.apply_transform(action)
                     color[3] = 120
                     change_textured_mesh_color(gripper_vis, color)  # purple
                     vis_scene.add_geometry(gripper_vis)
@@ -460,7 +470,7 @@ class TrainDP3Workspace:
                 filename = f"visualization_{index}.png"
                 filename = os.path.join(directory, filename)
 
-                look_at = [0, 0, 0]
+                look_at = [0.5, 0, 0]
 
                 camera_position = [1.8, 1.8, 1.2]
                 camera_pose = get_cam_pose_from_look_at(look_at, camera_position)
@@ -468,17 +478,18 @@ class TrainDP3Workspace:
                 vis_scene.camera_transform = camera_transform
                 png_1 = vis_scene.save_image([1000, 1000], visible=True, line_settings= {'point_size': 4})
 
-                camera_position = [0.2, 0.2, 2.2]
+                camera_position = [-1.8, 0, 1.2]
                 camera_pose = get_cam_pose_from_look_at(look_at, camera_position)
                 camera_transform = camera_pose @ np.diag([1, -1, -1, 1])
                 vis_scene.camera_transform = camera_transform
                 png_2 = vis_scene.save_image([1000, 1000], visible=True, line_settings= {'point_size': 4})
 
-                # horizontal concat these images
-                png = np.concatenate([png_1, png_2], axis=1)
+                # # horizontal concat these images
+                # import pdb; pdb.set_trace()
+                # png = np.concatenate((png_1, png_2), axis=1)
 
                 with open(filename, 'wb') as f:
-                    f.write(png)
+                    f.write(png_2)
                     f.close()
                 # import pdb; pdb.set_trace()
 
@@ -489,8 +500,8 @@ class TrainDP3Workspace:
         output_dir = self._output_dir
         if output_dir is None:
             output_dir = HydraConfig.get().runtime.output_dir
-        return "/viscam/projects/kdm/checkpoints"
-        # return output_dir
+        # return "/viscam/projects/kdm/checkpoints"
+        return output_dir
     
 
     def save_checkpoint(self, path=None, tag='latest', 
