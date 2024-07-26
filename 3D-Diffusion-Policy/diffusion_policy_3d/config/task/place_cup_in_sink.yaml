@@ -1,0 +1,27 @@
+name: place_cup_in_sink
+
+task_name: place_cup_in_sink
+
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    point_cloud:
+      shape: [4096, 6]
+      type: point_cloud
+    agent_pos:
+      shape: [10]
+      type: low_dimx
+  action:
+    shape: [10]
+
+env_runner: null
+
+dataset:
+  _target_: diffusion_policy_3d.dataset.blade_dataset.BLADEDataset
+  zarr_path: /viscam/projects/kdm/task1_whole_perturbation_processed/task1_object_centric_data_more.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.05
+  max_train_episodes: 90

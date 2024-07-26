@@ -1,5 +1,5 @@
 defaults:
-  - task: unblock_cabinet_door
+  - task: place_cup_in_sink
 
 name: train_dp3
 
@@ -102,7 +102,7 @@ training:
   resume: False
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 2000
+  num_epochs: 500
   gradient_accumulate_every: 1
   use_ema: True
   rollout_every: 200
